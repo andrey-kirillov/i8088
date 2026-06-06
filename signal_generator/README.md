@@ -1,6 +1,6 @@
 # i8088 Slow-Clock Signal Generator (RP2040 / Pico 1)
 
-A Raspberry Pi Pico that produces a **1–100 Hz, 33 %-duty clock** for
+A Raspberry Pi Pico that produces a **1–100 Hz, fixed-pulse clock** for
 single-stepping an Intel **80C88** CPU, with a 1602 LCD readout, a potentiometer
 for frequency, and a button to drop into manual single-step.
 
@@ -16,20 +16,21 @@ plug USB and run `make flash-bootsel`.
 
 ## Use
 
-- **AUTO** (default): turn the pot — clock sweeps 1 → 100 Hz. LCD shows frequency,
-  period and pulse (high) time.
-- **MODE button** (GP14): toggle AUTO ⇄ MANUAL (onboard LED on = MANUAL).
-- **MANUAL**: each **STEP button** (GP13) press emits exactly one clock cycle; the
-  pot still sets the pulse shape. LCD shows a step counter.
+- **AUTO** (default): turn the pot — clock sweeps 1 → 100 Hz. The **high pulse is a
+  fixed width** (100 µs); only the low time (frequency) changes.
+- **MODE button** (GP14): toggle AUTO ⇄ MANUAL.
+- **MANUAL**: each **STEP button** (GP13) press emits exactly one fixed-width pulse.
+  LCD shows a step counter.
+- Onboard LED is solid on while the firmware is running.
 
 LCD layout (16×2):
 
 ```
-AUTO f= 47.0Hz      MAN  step    42
-T=  21.3 h=  7.1     T=  21.3 h=  7.1
+AUTO f= 47.00Hz      MAN  step    42
+T= 0.021 P=100us     T= 0.021 P=100us
 ```
 
-`T` = period (ms), `h` = high/pulse time (ms) ≈ T/3.
+`T` = period in **seconds**, `P` = fixed high-pulse width in **µs** (constant).
 
 ## Hardware
 

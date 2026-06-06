@@ -1,15 +1,19 @@
 // i8088 slow-clock signal generator (RP2040 / Pico 1).
 //
-// Generates a 1-100 Hz, 33%-duty clock for single-stepping an Intel 80C88 (CMOS)
-// CPU. The potentiometer sets the frequency in AUTO mode; the MODE button toggles
-// to MANUAL single-step, where each STEP press emits exactly one clock cycle.
-// A 1602 LCD (PCF8574 I2C backpack) shows frequency, period and pulse (high) time.
+// Generates a 1-100 Hz clock for single-stepping an Intel 80C88 (CMOS) CPU.
+// The CLK high pulse is a FIXED width; the potentiometer varies only the low time,
+// i.e. the frequency. The 80C88 is a static part with no input duty-cycle rule and
+// no maximum period -- it only needs each phase above its minimum (CLK high time
+// TCHCL >= 69 ns, low time TCLCH >= 118 ns, Harris 80C88 datasheet), which a fixed
+// pulse + long low easily meets. MODE toggles AUTO/MANUAL; in MANUAL each STEP press
+// emits one fixed pulse. A 1602 LCD shows frequency, period and the fixed pulse.
 //
-// The 80C88 CLK input needs ~3.9-4.2 V logic-high and a 33% duty cycle, so GP15
-// must drive the CPU through a 74HCT buffer (3.3 V -> 5 V). The original NMOS 8088
-// CANNOT run this slow (2 MHz floor) - use the static CMOS 80C88. See CLAUDE.md.
+// The 80C88 CLK input needs ~3.9-4.2 V logic-high, so GP15 drives the CPU through an
+// inverting MOSFET level shifter (3.3 V -> 5 V). The original NMOS 8088 CANNOT run
+// this slow (2 MHz floor) - use the static CMOS 80C88. See CLAUDE.md.
 //
-// Core 1 is a dedicated clock engine (jitter-free); core 0 runs the UI.
+// Core 1 is a dedicated clock engine; its long low phase polls the shared timing in
+// small chunks so pot/mode changes apply within a few ms. Core 0 runs the UI.
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,8 +29,8 @@
 #define CLK_GPIO        15      // clock output -> Q1 level shifter -> 80C88 CLK
 // GP15 drives the 80C88 CLK through an INVERTING transistor stage (single
 // N-MOSFET, 3.3V -> 5V). With CLK_INVERTED=1 the firmware pre-inverts the GPIO so
-// the CPU's CLK stays high for 1/3 of the period (the 8088 33% duty). Set to 0 for
-// a non-inverting buffer (e.g. 74HCT125) wired straight to CLK.
+// the CPU's CLK is high during the pulse. Set to 0 for a non-inverting buffer
+// (e.g. 74HCT125) wired straight to CLK.
 #define CLK_INVERTED    1
 #define MODE_BTN_GPIO   14      // toggles AUTO/MANUAL, active-low to GND
 #define STEP_BTN_GPIO   13      // single-step in MANUAL, active-low to GND
@@ -46,9 +50,16 @@
 #define FREQ_MIN_HZ        1.0f
 #define FREQ_MAX_HZ        100.0f
 #define ADC_FULL_SCALE     4095.0f
-#define DUTY_HIGH_FRACTION (1.0f / 3.0f) // 33% duty: high time = period / 3
 #define US_PER_SECOND      1000000.0f
-#define US_PER_MS          1000.0f
+
+// Fixed CLK high-pulse width. The static CMOS 80C88 only needs each phase above its
+// minimum (high TCHCL >= 69 ns, low TCLCH >= 118 ns) with no duty-cycle rule, so the
+// high pulse is held CONSTANT and only the low time (frequency) varies. 100 us sits
+// well above the 69 ns floor and the MOSFET's RC edge, yet stays a small slice of
+// the period across 1-100 Hz. Keep it < 1000 us for the LCD's 3-digit field.
+#define PULSE_WIDTH_US     100u
+#define MIN_LOW_US         2u    // floor on the low phase if period ever nears pulse
+#define LOW_POLL_US        5000u // re-check pot/mode at least this often during low
 
 // ----- Timing / smoothing ----------------------------------------------------
 #define ADC_SMOOTH_ALPHA   0.20f  // EMA weight for the new sample
@@ -61,8 +72,8 @@
 
 // ----- Shared state (core 0 writes, core 1 reads) ---------------------------
 static critical_section_t s_clk_lock;
-static volatile uint32_t  s_high_us = 3333;   // high phase width
-static volatile uint32_t  s_low_us  = 6667;   // low phase width
+static volatile uint32_t  s_high_us = PULSE_WIDTH_US; // fixed high-pulse width
+static volatile uint32_t  s_low_us  = 9900;   // low phase width (varies with frequency)
 static volatile bool      s_manual  = false;  // AUTO (false) / MANUAL (true)
 static volatile bool      s_step_request = false;
 static volatile uint32_t  s_step_count   = 0;
@@ -73,34 +84,58 @@ static inline void clk_drive(bool cpu_high) {
     gpio_put(CLK_GPIO, CLK_INVERTED ? !cpu_high : cpu_high);
 }
 
-// Drive one full clock cycle: CPU CLK high for high_us, then low for low_us.
-static void emit_clock_cycle(uint32_t high_us, uint32_t low_us) {
+// Snapshot the shared timing/mode under the lock.
+static void read_clock_state(uint32_t *high_us, uint32_t *low_us, bool *manual) {
+    critical_section_enter_blocking(&s_clk_lock);
+    *high_us = s_high_us;
+    *low_us  = s_low_us;
+    *manual  = s_manual;
+    critical_section_exit(&s_clk_lock);
+}
+
+// Emit one fixed-width high pulse, then return CLK low.
+static void emit_high_pulse(uint32_t high_us) {
     clk_drive(true);
     busy_wait_us(high_us);
     clk_drive(false);
-    busy_wait_us(low_us);
 }
 
-// Core 1: nothing but clock generation, so the waveform stays jitter-free.
+// Core 1: clock engine. The high pulse is fixed; the long low phase polls the shared
+// state in chunks so a pot turn or mode change is picked up within a few ms (instead
+// of after a whole period, which at 1 Hz would be up to a second).
 static void core1_clock_engine(void) {
     while (true) {
         uint32_t high_us;
         uint32_t low_us;
-        critical_section_enter_blocking(&s_clk_lock);
-        high_us = s_high_us;
-        low_us  = s_low_us;
-        bool manual = s_manual;
-        critical_section_exit(&s_clk_lock);
+        bool manual;
+        read_clock_state(&high_us, &low_us, &manual);
 
-        if (!manual) {
-            emit_clock_cycle(high_us, low_us);
-        } else if (s_step_request) {
-            s_step_request = false;
-            emit_clock_cycle(high_us, low_us);
-            s_step_count++;
-        } else {
-            clk_drive(false);
-            busy_wait_us(MANUAL_IDLE_US);
+        if (manual) {
+            if (s_step_request) {
+                s_step_request = false;
+                emit_high_pulse(high_us);
+                s_step_count++;
+            } else {
+                clk_drive(false);
+                busy_wait_us(MANUAL_IDLE_US);
+            }
+            continue;
+        }
+
+        // AUTO: fixed high pulse, then a responsive low phase.
+        emit_high_pulse(high_us);
+        uint64_t low_start = time_us_64();
+        while (true) {
+            read_clock_state(&high_us, &low_us, &manual);
+            if (manual) {
+                break; // switched to MANUAL — start the next iteration immediately
+            }
+            uint64_t elapsed = time_us_64() - low_start;
+            if (elapsed >= low_us) {
+                break; // low phase complete
+            }
+            uint32_t remaining = low_us - (uint32_t)elapsed;
+            busy_wait_us(remaining < LOW_POLL_US ? remaining : LOW_POLL_US);
         }
     }
 }
@@ -126,13 +161,16 @@ static float read_frequency_hz(float *adc_ema) {
     return FREQ_MIN_HZ + fraction * (FREQ_MAX_HZ - FREQ_MIN_HZ);
 }
 
-// Convert a frequency into shared high/low widths under the lock.
+// Publish the shared high/low widths for a frequency: the high pulse is fixed, so
+// only the low time changes (low = period - pulse).
 static void publish_timing(float freq_hz) {
     float period_us = US_PER_SECOND / freq_hz;
-    uint32_t high_us = (uint32_t)(period_us * DUTY_HIGH_FRACTION);
-    uint32_t low_us  = (uint32_t)(period_us) - high_us;
+    uint32_t low_us = MIN_LOW_US;
+    if (period_us > (float)(PULSE_WIDTH_US + MIN_LOW_US)) {
+        low_us = (uint32_t)period_us - PULSE_WIDTH_US;
+    }
     critical_section_enter_blocking(&s_clk_lock);
-    s_high_us = high_us;
+    s_high_us = PULSE_WIDTH_US;
     s_low_us  = low_us;
     critical_section_exit(&s_clk_lock);
 }
@@ -167,20 +205,21 @@ static bool button_pressed(debounced_button_t *button) {
 
 // Render the two LCD lines from the current frequency and mode.
 static void update_display(float freq_hz) {
-    float period_ms = US_PER_SECOND / freq_hz / US_PER_MS;
-    float high_ms   = period_ms * DUTY_HIGH_FRACTION;
+    float period_s = 1.0f / freq_hz;                 // 0.010 s (100 Hz) .. 1.000 s (1 Hz)
     char line[LCD_COLUMNS + 1];
 
     lcd_set_cursor(0, 0);
     if (s_manual) {
         snprintf(line, sizeof(line), "MAN  step%6lu", (unsigned long)s_step_count);
     } else {
-        snprintf(line, sizeof(line), "AUTO f=%6.1fHz", (double)freq_hz);
+        snprintf(line, sizeof(line), "AUTO f=%6.2fHz", (double)freq_hz);
     }
     lcd_print(line);
 
+    // Period (T) in seconds varies; the high pulse (P) is fixed, shown in us.
     lcd_set_cursor(0, 1);
-    snprintf(line, sizeof(line), "T=%6.1f h=%5.1f", (double)period_ms, (double)high_ms);
+    snprintf(line, sizeof(line), "T=%6.3f P=%3luus",
+             (double)period_s, (unsigned long)PULSE_WIDTH_US);
     lcd_print(line);
 }
 

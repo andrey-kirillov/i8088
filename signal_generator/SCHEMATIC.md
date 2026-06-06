@@ -1,13 +1,13 @@
 # Schematic & Wiring — i8088 Slow-Clock Signal Generator
 
-Generates a 1–100 Hz, 33 %-duty clock for single-stepping an Intel **80C88
+Generates a 1–100 Hz fixed-pulse clock for single-stepping an Intel **80C88
 (CMOS)** CPU. See `schematic.svg` for the drawn version.
 
 > ⚠️ **Use the 80C88 (CMOS), not the NMOS 8088.** The NMOS part has a 2 MHz
 > minimum clock and cannot run/step this slowly. ⚠️ **The CLK line MUST be level
 > shifted to 5 V** — the 80C88 needs ~4.2 V logic-high; the Pico's 3.3 V GPIO is too
 > low to drive CLK directly. Here a single **inverting N-MOSFET (Q1)** does it; the
-> firmware pre-inverts (`CLK_INVERTED=1`) so the CPU still sees a 33 %-high clock.
+> firmware pre-inverts (`CLK_INVERTED=1`) so the CPU's CLK is high during the pulse.
 > (Datasheet basis in `CLAUDE.md`.)
 
 ---
@@ -48,11 +48,12 @@ Power: feed the rig from a single **5 V** supply. The Pico's **VBUS (pin 40)** i
 | GP15 (pin 20)   | Q1 **gate**                 | 3.3 V logic in                              |
 | Q1 gate         | Rg (100 kΩ) → GND           | holds gate defined while GP15 is hi-Z       |
 | Q1 **drain**    | Rd (4.7 kΩ) → +5 V          | pull-up; drain swings 0–5 V                 |
-| Q1 **drain**    | **80C88 CLK (pin 19)**      | inverted 0–5 V; firmware un-inverts → 33 %  |
+| Q1 **drain**    | **80C88 CLK (pin 19)**      | inverted 0–5 V; firmware un-inverts the pulse |
 | Q1 **source**   | GND                         |                                             |
 
 Because the stage inverts, the firmware drives GP15 inverted (`CLK_INVERTED=1`), so
-the 80C88's CLK ends up **high for 1/3** of the period as required.
+the 80C88's CLK goes **high for the fixed pulse width** (100 µs) each cycle; only the
+low time varies with the frequency knob.
 
 ### Potentiometer (frequency) — powered from 3V3, no divider
 
