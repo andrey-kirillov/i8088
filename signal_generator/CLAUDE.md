@@ -15,15 +15,15 @@ frequency, and a push-button to switch into manual single-step mode.
 - **AUTO mode** (default): the potentiometer sets the clock frequency, linearly
   mapped **1 Hz → 100 Hz**. The clock runs continuously.
 - **MANUAL mode**: pressing the **STEP** button emits exactly **one** fixed-width
-  pulse. A step counter is shown on the LCD. This is the 80C88 single-stepping
-  workflow.
+  pulse; the cycle count advances by one. This is the 80C88 single-stepping workflow.
 - The **MODE** button toggles AUTO ⇄ MANUAL.
 - The CLK **high pulse is a fixed width** (`PULSE_WIDTH_US`, 100 µs); only the **low**
   time varies, so turning the pot changes only the frequency, not the pulse. This is
   valid because the static 80C88 has no input duty-cycle rule — each phase just has
   to clear its minimum (see facts below).
-- LCD continuously displays **frequency (Hz)**, **period (T, seconds)** and the
-  **fixed pulse width (P, µs)**.
+- LCD displays **frequency (Hz)**, **period (T, seconds)** and the **cycle count**
+  (`c=`, clock pulses since the last reset — zeroed when RESET releases). The fixed
+  100 µs pulse isn't shown (it's constant).
 
 ---
 
@@ -71,10 +71,15 @@ datasheets. If you change the clock code, keep these invariants:
    MOSFET stage gives RC-soft edges (hundreds of ns) — irrelevant at 1–100 Hz, and
    the 100 µs pulse is far wider than the edge, but use a 74HCT buffer if you ever
    need fast edges. Don't add extra RC filtering.
-5. **RESET / READY for stepping**: hold **READY = HIGH** (no wait states) and
-   reset the CPU once via a Schmitt-trigger RC (or an 8284A/82C84A). Because the
-   80C88 is static, ALE/RD/WR/address/data stay valid between manual edges so you
-   can latch and inspect the bus — the point of single-stepping.
+5. **RESET (active HIGH) is driven by the Pico** (GP12). The 80C88 RESET must be
+   **HIGH for > 4 clock cycles** and is **synchronised to the clock**, so the firmware
+   counts clock *pulses* (`RESET_HOLD_CYCLES = 8`), not time — it asserts RESET at
+   power-up and releases it once 8 cycles have been clocked out. The high→low edge is
+   ≥ 50 µs after power-up (boot + several slow cycles ≫ 50 µs). After release the CPU
+   runs ~7 internal cycles, then fetches from FFFF0H. A **RESET button** (GP11)
+   re-asserts. In MANUAL you literally clock the reset out by stepping. Hold
+   **READY = HIGH** (no wait states). Because the 80C88 is static, ALE/RD/WR/address/
+   data stay valid between manual edges so you can latch and inspect the bus.
 
 ---
 
@@ -85,6 +90,8 @@ datasheets. If you change the clock code, keep these invariants:
 | **CLK out**       | GP15  | → Q1 gate (inverting N-MOSFET) → 80C88 CLK (5 V). **Level shifter required.** |
 | **MODE button**   | GP14  | to GND, internal pull-up, active-low                        |
 | **STEP button**   | GP13  | to GND, internal pull-up, active-low                        |
+| **RESET out**     | GP12  | → 80C88 RESET (active HIGH, pin 21). Internal pull-up (ext. 10 k optional) |
+| **RESET button**  | GP11  | to GND, internal pull-up, active-low; re-asserts RESET      |
 | **Pot wiper**     | GP26  | ADC0. Via voltage divider if pot is on 5 V (see schematic)  |
 | LCD SDA           | GP4   | I²C0, to PCF8574 SDA                                         |
 | LCD SCL           | GP5   | I²C0, to PCF8574 SCL                                         |
@@ -94,6 +101,13 @@ PCF8574 address default **0x27** (`LCD_ADDR`); use **0x3F** for PCF8574**A**
 backpacks. The 1602 + PCF8574 run at 5 V (VBUS); SDA/SCL are open-drain and pulled
 to 5 V — RP2040 GPIO is 5 V-tolerant on the I²C lines via the backpack's own
 pull-ups, but if unsure use 3.3 V pull-ups / a level shifter.
+
+**Pin idle states are set in firmware with RP2040 internal pulls** (safe-state
+polarity): pull-down on the CLK gate (GP15) and LED (GP25), pull-up on RESET (GP12)
+and all buttons (GP11/13/14) and I²C (GP4/5). **GP26 (ADC) is intentionally left with
+no pull** — a pull would skew the analog reading; `adc_gpio_init()` disables them.
+So external `Rg`/`Rrst`/button/I²C pull resistors are optional (add them only to
+define levels during the ROM-boot window before firmware runs).
 
 ---
 

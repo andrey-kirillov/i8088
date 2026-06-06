@@ -20,10 +20,12 @@ Generates a 1–100 Hz fixed-pulse clock for single-stepping an Intel **80C88
 | U2      | 1602 LCD + PCF8574 I²C backpack         | addr 0x27 (or 0x3F for PCF8574A)        |
 | Q1      | N-MOSFET (NCE6050; or 2N7000/BSS138)    | inverting 3.3 V → 5 V level shift for CLK |
 | Rd      | 4.7 kΩ (1 kΩ for a logic-level FET)     | Q1 drain pull-up to +5 V                |
-| Rg      | 100 kΩ                                  | Q1 gate pull-down (defines gate at boot)|
+| Rg      | 100 kΩ *(optional)*                     | Q1 gate pull-down — firmware enables the RP2040 internal pull-down on GP15 |
 | RV1     | 10 kΩ linear potentiometer              | frequency control (powered from 3V3)    |
 | SW1     | momentary push-button                   | MODE (AUTO ⇄ MANUAL)                    |
 | SW2     | momentary push-button                   | STEP (one clock pulse in MANUAL)        |
+| SW3     | momentary push-button                   | RESET (re-assert 80C88 reset)           |
+| Rrst    | 10 kΩ *(optional)*                      | RESET pull-up — firmware enables the RP2040 internal pull-up on GP12 |
 | —       | Intel **80C88** target CPU              | the device being clocked               |
 | C1      | 100 nF                                  | decoupling on the 80C88 / 5 V rail     |
 
@@ -36,6 +38,15 @@ Power: feed the rig from a single **5 V** supply. The Pico's **VBUS (pin 40)** i
 > (it sinks <1 mA). Edges become RC-soft (hundreds of ns) — fine at 1–100 Hz.
 > Verify: GP15 high → drain < ~0.4 V. A true logic-level FET (2N7000/BSS138) lets
 > you use Rd = 1 k for sharper edges.
+
+> **Pull resistors are configured in firmware (RP2040 internal pulls):** gate
+> pull-down on GP15, RESET pull-up on GP12, button pull-ups on GP11/13/14, I²C
+> pull-ups on GP4/GP5, LED pull-down on GP25. The pot/ADC pin (GP26) is deliberately
+> left floating to the pot. So `Rg`, `Rrst` and button/I²C pull resistors are
+> **optional** — add the external ones only if you need a defined level during the
+> ~tens-of-ms ROM-boot window before firmware runs (the CPU is held in reset and
+> unclocked then, so it's normally harmless). `Rd` is **not** optional (it's the
+> active drain pull-up the MOSFET switches against).
 
 ---
 
@@ -75,7 +86,20 @@ the wiper within the 3.3 V ADC range with no extra parts and no loading error.
 | From (Pico)     | To        | Function                                  |
 |-----------------|-----------|-------------------------------------------|
 | GP14 (pin 19)   | SW1 → GND | MODE: toggle AUTO ⇄ MANUAL                |
-| GP13 (pin 17)   | SW2 → GND | STEP: emit one clock cycle (MANUAL only)  |
+| GP13 (pin 17)   | SW2 → GND | STEP: emit one clock pulse (MANUAL only)  |
+| GP11 (pin 15)   | SW3 → GND | RESET: re-assert 80C88 reset              |
+
+### RESET (active HIGH — driven by the Pico)
+
+| From            | To                          | Notes                                        |
+|-----------------|-----------------------------|----------------------------------------------|
+| GP12 (pin 16)   | **80C88 RESET (pin 21)**    | active HIGH; 3.3 V clears RESET V_IH (2.0 V) |
+| GP12            | internal pull-up (firmware) | holds RESET high while the pin is hi-Z; `Rrst` to +5 V optional |
+
+The Pico asserts RESET at power-up and releases it after **> 4 clock cycles** have
+been clocked out (RESET is clock-synchronised, so cycles are *counted*, not timed).
+The high→low edge lands ≥ 50 µs after power-up. RESET is a normal input (V_IH = 2.0 V),
+so 3.3 V drives it directly; if your part lists a higher V_IH, buffer it like the CLK.
 
 ### LCD (PCF8574 I²C backpack)
 
@@ -99,7 +123,7 @@ the RP2040 I²C pins tolerate it and the PCF8574 reads 3.3 V as a valid high.
 | Vcc (40)        | 5 V           |                                           |
 | GND (1, 20)     | GND           |                                           |
 | READY (22)      | 5 V (HIGH)    | no wait states                            |
-| RESET (21)      | RC + Schmitt / 82C84A | power-on reset, held ≥4 clocks    |
+| RESET (21)      | GP12 (+ 10 k to 5 V) | Pico-driven, active HIGH, >4 clocks |
 | MN/MX (33)      | per your bus design | min/max mode select                 |
 
 ---
@@ -119,9 +143,12 @@ the RP2040 I²C pins tolerate it and the PCF8574 reads 3.3 V as a valid high.
 
    GP4 ─── SDA ┐                 GP14 ──[SW1 MODE]── GND
    GP5 ─── SCL ┤ PCF8574 ─ 1602  GP13 ──[SW2 STEP]── GND
-   5V  ─── VCC ┘
+   5V  ─── VCC ┘                 GP11 ──[SW3 RESET]─ GND
+
+                      +5V ──[Rrst 10k]──┐
+   GP12 ──────────────────────────────┴──► 80C88 RESET (pin 21, active HIGH)
    GND ─── GND
 ```
 
-The 80C88 also needs RESET (RC/Schmitt or 82C84A) and READY = HIGH; data/address
-latches (8282) and bus inspection LEDs are up to your target board.
+READY = HIGH (no wait states). Data/address latches (8282) and bus-inspection LEDs
+are up to your target board.

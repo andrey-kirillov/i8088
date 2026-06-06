@@ -19,18 +19,21 @@ plug USB and run `make flash-bootsel`.
 - **AUTO** (default): turn the pot — clock sweeps 1 → 100 Hz. The **high pulse is a
   fixed width** (100 µs); only the low time (frequency) changes.
 - **MODE button** (GP14): toggle AUTO ⇄ MANUAL.
-- **MANUAL**: each **STEP button** (GP13) press emits exactly one fixed-width pulse.
-  LCD shows a step counter.
+- **MANUAL**: each **STEP button** (GP13) press emits exactly one fixed-width pulse;
+  the cycle count ticks up by one each press.
+- **Cycle count** `c=` is the number of clock pulses since the last reset (zeroed when
+  RESET releases), so it tracks the CPU's clocks from the reset vector.
 - Onboard LED is solid on while the firmware is running.
 
 LCD layout (16×2):
 
 ```
-AUTO f= 47.00Hz      MAN  step    42
-T= 0.021 P=100us     T= 0.021 P=100us
+AUTO f= 47.00Hz      MAN  f= 47.00Hz
+c=     128 T0.021    c=      42 T0.021
 ```
 
-`T` = period in **seconds**, `P` = fixed high-pulse width in **µs** (constant).
+`c=` = clock cycles since reset, `T` = period in **seconds**. (The high pulse is a
+fixed 100 µs — constant, so it isn't shown.)
 
 ## Hardware
 

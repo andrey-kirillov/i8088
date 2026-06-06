@@ -16,7 +16,7 @@
   </style>
 
   <text x="40" y="32" class="title" font-size="18">i8088 Slow-Clock Generator — exact pin-to-pin wiring (RP2040 Pico 1)</text>
-  <text x="40" y="54" class="warn">Target = 80C88 (CMOS). CLK level-shifted 3.3V→5V by inverting MOSFET Q1; firmware pre-inverts to keep the 33% duty. Pot on 3V3 — no divider.</text>
+  <text x="40" y="54" class="warn">Target = 80C88 (CMOS). CLK level-shifted 3.3V→5V by inverting MOSFET Q1 (firmware pre-inverts). Fixed-width pulse; pot on 3V3 sets frequency. RESET on GP12 (active HIGH).</text>
 
   <!-- ===== power rails ===== -->
   <line x1="300" y1="100" x2="1170" y2="100" class="pwr"/>
@@ -58,14 +58,14 @@
   <text x="696" y="137" class="note">Rd 4.7k</text>
   <!-- Rg gate pull-down -->
   <rect x="585" y="300" width="30" height="24" class="blk"/>
-  <text x="620" y="317" class="note">Rg 100k</text>
+  <text x="620" y="317" class="note">Rg 100k (opt)</text>
 
   <!-- ===== 80C88 ===== -->
   <rect x="960" y="160" width="210" height="200" class="blk"/>
   <text x="1065" y="186" text-anchor="middle" class="title">80C88 CPU</text>
   <text x="970" y="212" class="pin">CLK (19)</text>
   <text x="970" y="248" class="note">READY (22) = +5V</text>
-  <text x="970" y="276" class="note">RESET (21) = RC / 82C84A</text>
+  <text x="970" y="276" class="note">RESET (21) ←</text>
   <text x="970" y="304" class="note">Vcc (40) = +5V</text>
   <text x="970" y="332" class="note">GND (1, 20) = GND</text>
 
@@ -159,6 +159,27 @@
   <!-- pot bottom -> GND -->
   <path class="gnd" d="M452 620 V745"/>
   <circle cx="452" cy="745" r="4" fill="#0a7d2c"/>
+
+  <!-- ===== RESET (active HIGH; Pico GP12 drives it, SW3 re-asserts) ===== -->
+  <!-- 80C88 RESET pin -> node -> GP12 -->
+  <path class="sig" d="M960 276 H930 V455"/>
+  <circle cx="930" cy="276" r="3.5" fill="#111"/>
+  <text x="936" y="450" class="wlbl">GP12(16) → RESET(21)</text>
+  <text x="936" y="468" class="note">GP12/GP11 = Pico pins 16/15</text>
+  <!-- Rrst pull-up to +5V: holds RESET high while the Pico boots -->
+  <path class="pwr" d="M930 276 V192"/>
+  <rect x="915" y="168" width="30" height="24" class="blk"/>
+  <text x="908" y="185" text-anchor="end" class="note">Rrst 10k (opt)</text>
+  <path class="pwr" d="M930 168 V100"/>
+  <circle cx="930" cy="100" r="4" fill="#d11"/>
+  <!-- SW3 RESET button -> GND -->
+  <rect x="1010" y="500" width="130" height="26" fill="#fff" stroke="#111" stroke-width="2"/>
+  <text x="1075" y="518" text-anchor="middle" class="pin">SW3 RESET</text>
+  <path class="sig" d="M963 513 H1010"/>
+  <text x="905" y="517" class="wlbl">GP11(15)</text>
+  <path class="gnd" d="M1140 513 V745"/>
+  <circle cx="1140" cy="745" r="4" fill="#0a7d2c"/>
+  <text x="1146" y="690" class="wlbl" fill="#0a7d2c">→GND</text>
 
   <!-- ===== legend ===== -->
   <rect x="610" y="640" width="500" height="56" fill="#fafafa" stroke="#bbb"/>

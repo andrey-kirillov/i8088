@@ -37,6 +37,8 @@
 #define POT_ADC_GPIO    26      // potentiometer wiper -> ADC0
 #define POT_ADC_CHANNEL 0
 #define STATUS_LED_GPIO PICO_DEFAULT_LED_PIN // built-in LED, solid on = running
+#define RESET_OUT_GPIO  12      // 80C88 RESET (active HIGH); held >4 clocks then low
+#define RESET_BTN_GPIO  11      // press to re-assert RESET, active-low to GND
 
 // ----- LCD (PCF8574 I2C backpack) -------------------------------------------
 #define LCD_I2C        i2c0
@@ -61,6 +63,12 @@
 #define MIN_LOW_US         2u    // floor on the low phase if period ever nears pulse
 #define LOW_POLL_US        5000u // re-check pot/mode at least this often during low
 
+// The 80C88 RESET must be HIGH for >4 clock cycles (and the high->low edge >=50 us
+// after power-up) to be recognised; it is synchronised to the clock, so we count
+// clock PULSES, not time. Hold for 8 (>4 with margin). In MANUAL you clock these out
+// by stepping; in AUTO they pass automatically. (Harris 80C88 reset description.)
+#define RESET_HOLD_CYCLES  8u
+
 // ----- Timing / smoothing ----------------------------------------------------
 #define ADC_SMOOTH_ALPHA   0.20f  // EMA weight for the new sample
 #define ADC_OVERSAMPLE     16     // ADC reads averaged per sample (noise rejection)
@@ -76,12 +84,17 @@ static volatile uint32_t  s_high_us = PULSE_WIDTH_US; // fixed high-pulse width
 static volatile uint32_t  s_low_us  = 9900;   // low phase width (varies with frequency)
 static volatile bool      s_manual  = false;  // AUTO (false) / MANUAL (true)
 static volatile bool      s_step_request = false;
-static volatile uint32_t  s_step_count   = 0;
+static volatile uint32_t  s_cycle_count  = 0;  // clock pulses since the last reset
 
 // Drive the GPIO so the 80C88 CLK pin reaches `cpu_high`, compensating for the
 // inverting transistor stage between GP15 and the CPU.
 static inline void clk_drive(bool cpu_high) {
     gpio_put(CLK_GPIO, CLK_INVERTED ? !cpu_high : cpu_high);
+}
+
+// Drive the 80C88 RESET pin (active HIGH): true = hold the CPU in reset, false = run.
+static inline void reset_drive(bool asserted) {
+    gpio_put(RESET_OUT_GPIO, asserted);
 }
 
 // Snapshot the shared timing/mode under the lock.
@@ -114,7 +127,7 @@ static void core1_clock_engine(void) {
             if (s_step_request) {
                 s_step_request = false;
                 emit_high_pulse(high_us);
-                s_step_count++;
+                s_cycle_count++;
             } else {
                 clk_drive(false);
                 busy_wait_us(MANUAL_IDLE_US);
@@ -124,6 +137,7 @@ static void core1_clock_engine(void) {
 
         // AUTO: fixed high pulse, then a responsive low phase.
         emit_high_pulse(high_us);
+        s_cycle_count++;
         uint64_t low_start = time_us_64();
         while (true) {
             read_clock_state(&high_us, &low_us, &manual);
@@ -203,40 +217,56 @@ static bool button_pressed(debounced_button_t *button) {
     return false;
 }
 
-// Render the two LCD lines from the current frequency and mode.
-static void update_display(float freq_hz) {
+// Render the two LCD lines from the current frequency, mode and reset state.
+static void update_display(float freq_hz, bool resetting, uint32_t reset_done) {
     float period_s = 1.0f / freq_hz;                 // 0.010 s (100 Hz) .. 1.000 s (1 Hz)
     char line[LCD_COLUMNS + 1];
 
     lcd_set_cursor(0, 0);
-    if (s_manual) {
-        snprintf(line, sizeof(line), "MAN  step%6lu", (unsigned long)s_step_count);
+    if (resetting) {
+        snprintf(line, sizeof(line), "RESET hold %2lu/%u",
+                 (unsigned long)reset_done, (unsigned)RESET_HOLD_CYCLES);
     } else {
-        snprintf(line, sizeof(line), "AUTO f=%6.2fHz", (double)freq_hz);
+        snprintf(line, sizeof(line), "%s f=%6.2fHz",
+                 s_manual ? "MAN " : "AUTO", (double)freq_hz);
     }
     lcd_print(line);
 
-    // Period (T) in seconds varies; the high pulse (P) is fixed, shown in us.
+    // Cycle count (clock pulses since the last reset) and the period in seconds.
     lcd_set_cursor(0, 1);
-    snprintf(line, sizeof(line), "T=%6.3f P=%3luus",
-             (double)period_s, (unsigned long)PULSE_WIDTH_US);
+    snprintf(line, sizeof(line), "c=%7lu T%5.3f",
+             (unsigned long)s_cycle_count, (double)period_s);
     lcd_print(line);
 }
 
 int main(void) {
     stdio_init_all();
 
-    // Clock output (idle CPU CLK low through the inverting stage).
+    // 80C88 RESET asserted first thing, so the CPU is held in reset from power-up.
+    // The internal pull-up holds RESET high (active) while the pin is still hi-Z,
+    // replacing an external pull-up (it pulls to 3.3 V, which clears RESET V_IH 2.0 V).
+    gpio_init(RESET_OUT_GPIO);
+    gpio_pull_up(RESET_OUT_GPIO);
+    gpio_set_dir(RESET_OUT_GPIO, GPIO_OUT);
+    reset_drive(true);
+
+    // Clock output (idle CPU CLK low through the inverting stage). The internal
+    // pull-down holds the MOSFET gate low while the pin is hi-Z (MOSFET off),
+    // replacing an external gate pull-down.
     gpio_init(CLK_GPIO);
+    gpio_pull_down(CLK_GPIO);
     gpio_set_dir(CLK_GPIO, GPIO_OUT);
     clk_drive(false);
 
-    // Built-in LED solid on to show the firmware is running.
+    // Built-in LED solid on to show the firmware is running. Pull-down keeps it off
+    // while the pin is hi-Z (before it is driven).
     gpio_init(STATUS_LED_GPIO);
+    gpio_pull_down(STATUS_LED_GPIO);
     gpio_set_dir(STATUS_LED_GPIO, GPIO_OUT);
     gpio_put(STATUS_LED_GPIO, 1);
 
-    // Potentiometer ADC.
+    // Potentiometer ADC. adc_gpio_init() disables the digital input and BOTH pulls on
+    // GP26 — an analog input must float to the pot, never to an internal pull.
     adc_init();
     adc_gpio_init(POT_ADC_GPIO);
     adc_select_input(POT_ADC_CHANNEL);
@@ -252,8 +282,10 @@ int main(void) {
     // Buttons.
     debounced_button_t mode_button;
     debounced_button_t step_button;
+    debounced_button_t reset_button;
     button_init(&mode_button, MODE_BTN_GPIO);
     button_init(&step_button, STEP_BTN_GPIO);
+    button_init(&reset_button, RESET_BTN_GPIO);
 
     // Seed timing before launching the clock engine on core 1.
     float adc_ema = adc_read();
@@ -262,6 +294,11 @@ int main(void) {
     critical_section_init(&s_clk_lock);
     multicore_launch_core1(core1_clock_engine);
 
+    // RESET is asserted at power-up; it releases after >4 clock cycles have been
+    // clocked out (counted, since RESET is clock-synchronised). A press re-asserts.
+    bool reset_active = true;
+    uint32_t reset_start_cycle = s_cycle_count;
+
     uint64_t next_lcd_update = 0;
     while (true) {
         if (button_pressed(&mode_button)) {
@@ -269,6 +306,21 @@ int main(void) {
         }
         if (button_pressed(&step_button) && s_manual) {
             s_step_request = true;
+        }
+        if (button_pressed(&reset_button)) {
+            reset_active = true;
+            reset_start_cycle = s_cycle_count;
+            reset_drive(true);
+        }
+
+        // Release RESET once enough clock cycles have passed while it was held high,
+        // then zero the cycle count so it tracks execution cycles from the reset vector.
+        uint32_t reset_done = s_cycle_count - reset_start_cycle;
+        if (reset_active && reset_done >= RESET_HOLD_CYCLES) {
+            reset_drive(false);
+            reset_active = false;
+            s_cycle_count = 0;
+            reset_start_cycle = 0;
         }
 
         // Hysteresis keeps the clock and the T/H readout steady while the knob is
@@ -283,7 +335,8 @@ int main(void) {
 
         uint64_t now = time_us_64();
         if (now >= next_lcd_update) {
-            update_display(stable_freq_hz);
+            uint32_t shown = reset_done < RESET_HOLD_CYCLES ? reset_done : RESET_HOLD_CYCLES;
+            update_display(stable_freq_hz, reset_active, shown);
             next_lcd_update = now + LCD_REFRESH_US;
         }
     }
