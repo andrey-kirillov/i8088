@@ -54,11 +54,16 @@ datasheets. If you change the clock code, keep these invariants:
    with a 33 % duty cycle"*. Firmware: `high_us = period/3`, `low_us = period − high_us`.
 3. **CLK logic-high is unusually high.** `VCH` (NMOS 8088) = **3.9 V min**; `VIHC`
    (80C88) = **Vcc − 0.8 ≈ 4.2 V** at Vcc = 5 V. **A 3.3 V RP2040 GPIO does NOT
-   reach this** (short by 0.6–0.9 V). → the CLK output is level-shifted to 5 V by a
-   **74HCT244/74HCT125** buffer (HCT inputs accept 3.3 V as logic-high; outputs
-   swing to ~5 V). **Never wire GP15 straight to the 80C88 CLK pin.**
-4. **Edges**: `TCH1CH2`/`TCL2CL1` ≤ 10 ns — trivially met; the 74HCT buffer gives
-   sharp edges. Don't RC-filter the clock line.
+   reach this** (short by 0.6–0.9 V). → the CLK output is level-shifted to 5 V by an
+   **inverting N-MOSFET (Q1)** stage (gate ← GP15, drain → CLK with a pull-up to
+   +5 V, source → GND). A 74HCT244/125 buffer is the non-inverting alternative.
+   **Never wire GP15 straight to the 80C88 CLK pin.**
+   - Because the MOSFET stage **inverts**, the firmware pre-inverts via
+     `CLK_INVERTED 1` (`clk_drive()`), so the CPU still sees 33 % high. Set
+     `CLK_INVERTED 0` for a non-inverting buffer.
+4. **Edges**: `TCH1CH2`/`TCL2CL1` ≤ 10 ns is the datasheet spec; a resistor-pull-up
+   MOSFET stage gives RC-soft edges (hundreds of ns) — irrelevant at 1–100 Hz, but
+   use a 74HCT buffer if you ever need fast edges. Don't add extra RC filtering.
 5. **RESET / READY for stepping**: hold **READY = HIGH** (no wait states) and
    reset the CPU once via a Schmitt-trigger RC (or an 8284A/82C84A). Because the
    80C88 is static, ALE/RD/WR/address/data stay valid between manual edges so you
@@ -70,13 +75,13 @@ datasheets. If you change the clock code, keep these invariants:
 
 | Signal            | GPIO  | Notes                                                        |
 |-------------------|-------|-------------------------------------------------------------|
-| **CLK out**       | GP15  | → 74HCT244/125 input → 80C88 CLK (5 V). **Buffer required.** |
+| **CLK out**       | GP15  | → Q1 gate (inverting N-MOSFET) → 80C88 CLK (5 V). **Level shifter required.** |
 | **MODE button**   | GP14  | to GND, internal pull-up, active-low                        |
 | **STEP button**   | GP13  | to GND, internal pull-up, active-low                        |
 | **Pot wiper**     | GP26  | ADC0. Via voltage divider if pot is on 5 V (see schematic)  |
 | LCD SDA           | GP4   | I²C0, to PCF8574 SDA                                         |
 | LCD SCL           | GP5   | I²C0, to PCF8574 SCL                                         |
-| Status LED        | GP25  | onboard; on = MANUAL mode                                    |
+| Status LED        | GP25  | onboard built-in LED; solid on = firmware running           |
 
 PCF8574 address default **0x27** (`LCD_ADDR`); use **0x3F** for PCF8574**A**
 backpacks. The 1602 + PCF8574 run at 5 V (VBUS); SDA/SCL are open-drain and pulled

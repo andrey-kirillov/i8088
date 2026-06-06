@@ -4,9 +4,11 @@ Generates a 1–100 Hz, 33 %-duty clock for single-stepping an Intel **80C88
 (CMOS)** CPU. See `schematic.svg` for the drawn version.
 
 > ⚠️ **Use the 80C88 (CMOS), not the NMOS 8088.** The NMOS part has a 2 MHz
-> minimum clock and cannot run/step this slowly. ⚠️ **The CLK line MUST go through
-> a 74HCT buffer to 5 V** — the 80C88 needs ~4.2 V logic-high; the Pico's 3.3 V
-> GPIO is too low to drive CLK directly. (Datasheet basis in `CLAUDE.md`.)
+> minimum clock and cannot run/step this slowly. ⚠️ **The CLK line MUST be level
+> shifted to 5 V** — the 80C88 needs ~4.2 V logic-high; the Pico's 3.3 V GPIO is too
+> low to drive CLK directly. Here a single **inverting N-MOSFET (Q1)** does it; the
+> firmware pre-inverts (`CLK_INVERTED=1`) so the CPU still sees a 33 %-high clock.
+> (Datasheet basis in `CLAUDE.md`.)
 
 ---
 
@@ -16,30 +18,41 @@ Generates a 1–100 Hz, 33 %-duty clock for single-stepping an Intel **80C88
 |---------|----------------------------------------|----------------------------------------|
 | U1      | Raspberry Pi Pico (RP2040 / Pico 1)    | the generator                          |
 | U2      | 1602 LCD + PCF8574 I²C backpack         | addr 0x27 (or 0x3F for PCF8574A)        |
-| U3      | 74HCT125 (or 74HCT244) buffer           | 3.3 V → 5 V level shift for CLK         |
+| Q1      | N-MOSFET (NCE6050; or 2N7000/BSS138)    | inverting 3.3 V → 5 V level shift for CLK |
+| Rd      | 4.7 kΩ (1 kΩ for a logic-level FET)     | Q1 drain pull-up to +5 V                |
+| Rg      | 100 kΩ                                  | Q1 gate pull-down (defines gate at boot)|
 | RV1     | 10 kΩ linear potentiometer              | frequency control (powered from 3V3)    |
 | SW1     | momentary push-button                   | MODE (AUTO ⇄ MANUAL)                    |
 | SW2     | momentary push-button                   | STEP (one clock pulse in MANUAL)        |
 | —       | Intel **80C88** target CPU              | the device being clocked               |
-| C1      | 100 nF                                  | decoupling on the 74HCT Vcc            |
+| C1      | 100 nF                                  | decoupling on the 80C88 / 5 V rail     |
 
 Power: feed the rig from a single **5 V** supply. The Pico's **VBUS (pin 40)** is
 5 V when USB-powered; use that for the 5 V rail, and the Pico's **3V3 (pin 36)** for
-3.3 V. Tie **all grounds together** (Pico, 74HCT, LCD, pot, 80C88).
+3.3 V. Tie **all grounds together** (Pico, Q1 source, LCD, pot, 80C88).
+
+> **Q1 = NCE6050 note:** it's a power FET, not logic-level (Vgs(th) up to ~4 V), so
+> 3.3 V only weakly turns it on. With Rd = 4.7 k–10 k it still pulls a clean low
+> (it sinks <1 mA). Edges become RC-soft (hundreds of ns) — fine at 1–100 Hz.
+> Verify: GP15 high → drain < ~0.4 V. A true logic-level FET (2N7000/BSS138) lets
+> you use Rd = 1 k for sharper edges.
 
 ---
 
 ## Connection table
 
-### Clock output (the important one)
+### Clock output (the important one) — inverting MOSFET level shifter
 
-| From (Pico)        | To                         | Notes                                  |
-|--------------------|----------------------------|----------------------------------------|
-| GP15 (pin 20)      | 74HCT125 input (1A, pin 2) | 3.3 V logic                            |
-| —                  | 74HCT125 /OE (1OE, pin 1) → GND | enable the gate                   |
-| 74HCT125 out (1Y, pin 3) | **80C88 CLK (pin 19)** | now a clean 0–5 V, 33 %-duty clock |
-| VBUS 5 V (pin 40)  | 74HCT125 Vcc (pin 14)      | + 100 nF to GND (C1)                   |
-| GND                | 74HCT125 GND (pin 7)       |                                        |
+| From            | To                          | Notes                                       |
+|-----------------|-----------------------------|---------------------------------------------|
+| GP15 (pin 20)   | Q1 **gate**                 | 3.3 V logic in                              |
+| Q1 gate         | Rg (100 kΩ) → GND           | holds gate defined while GP15 is hi-Z       |
+| Q1 **drain**    | Rd (4.7 kΩ) → +5 V          | pull-up; drain swings 0–5 V                 |
+| Q1 **drain**    | **80C88 CLK (pin 19)**      | inverted 0–5 V; firmware un-inverts → 33 %  |
+| Q1 **source**   | GND                         |                                             |
+
+Because the stage inverts, the firmware drives GP15 inverted (`CLK_INVERTED=1`), so
+the 80C88's CLK ends up **high for 1/3** of the period as required.
 
 ### Potentiometer (frequency) — powered from 3V3, no divider
 
@@ -81,7 +94,7 @@ the RP2040 I²C pins tolerate it and the PCF8574 reads 3.3 V as a valid high.
 
 | 80C88 pin       | Tie to        | Why                                       |
 |-----------------|---------------|-------------------------------------------|
-| CLK (19)        | 74HCT125 out  | the slow clock                            |
+| CLK (19)        | Q1 drain      | the slow clock (inverted by Q1)           |
 | Vcc (40)        | 5 V           |                                           |
 | GND (1, 20)     | GND           |                                           |
 | READY (22)      | 5 V (HIGH)    | no wait states                            |
@@ -93,14 +106,15 @@ the RP2040 I²C pins tolerate it and the PCF8574 reads 3.3 V as a valid high.
 ## ASCII overview
 
 ```
-                              +5V rail (VBUS, pin 40)
-                                 │            │
-                                 │      ┌─────┴─────┐
-   3V3 ─┐ RV1 10k pot            │      │  74HCT125 │  Vcc(14)
-        │                        │      │           │
-       [ ]── wiper ──► GP26/ADC0  GP15 ──►1A(2)  1Y(3)──► 80C88 CLK (pin 19)
-        │                          GND ──►/OE(1)  GND(7)──► GND
-   GND ─┘                        └───────────┘
+                              +5V ──[Rd 4.7k]──┐
+                                               │
+   3V3 ─┐ RV1 10k pot                          ├──► 80C88 CLK (pin 19)
+        │                                      │
+       [ ]── wiper ──► GP26/ADC0      GP15 ──►┤ D
+        │                              gate    │ Q1  (NCE6050, N-MOSFET)
+   GND ─┘                               │      │ S
+                                  Rg 100k│      └──► GND
+                                        GND   (drain inverts; firmware un-inverts)
 
    GP4 ─── SDA ┐                 GP14 ──[SW1 MODE]── GND
    GP5 ─── SCL ┤ PCF8574 ─ 1602  GP13 ──[SW2 STEP]── GND

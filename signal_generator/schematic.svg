@@ -16,7 +16,7 @@
   </style>
 
   <text x="40" y="32" class="title" font-size="18">i8088 Slow-Clock Generator — exact pin-to-pin wiring (RP2040 Pico 1)</text>
-  <text x="40" y="54" class="warn">Target = 80C88 (CMOS). CLK level-shifted 3.3V→5V via 74HCT125, 33% duty. Potentiometer powered from 3V3 — NO divider.</text>
+  <text x="40" y="54" class="warn">Target = 80C88 (CMOS). CLK level-shifted 3.3V→5V by inverting MOSFET Q1; firmware pre-inverts to keep the 33% duty. Pot on 3V3 — no divider.</text>
 
   <!-- ===== power rails ===== -->
   <line x1="300" y1="100" x2="1170" y2="100" class="pwr"/>
@@ -46,13 +46,19 @@
   <line x1="240" y1="530" x2="262" y2="530" class="stub"/>
   <line x1="240" y1="590" x2="262" y2="590" class="stub"/>
 
-  <!-- ===== 74HCT125 ===== -->
-  <rect x="610" y="160" width="180" height="130" class="blk"/>
-  <text x="700" y="186" text-anchor="middle" class="title">74HCT125</text>
-  <text x="620" y="212" class="pin">1A (2)</text>
-  <text x="620" y="250" class="pin">/OE (1)</text>
-  <text x="780" y="212" text-anchor="end" class="pin">1Y (3)</text>
-  <text x="700" y="280" text-anchor="middle" class="note">Vcc(14)  GND(7)</text>
+  <!-- ===== Q1 inverting level shifter (N-MOSFET) ===== -->
+  <rect x="635" y="195" width="80" height="75" class="blk"/>
+  <text x="675" y="228" text-anchor="middle" class="title" font-size="14">Q1</text>
+  <text x="675" y="248" text-anchor="middle" class="note">NCE6050</text>
+  <text x="642" y="227" class="pin">G</text>
+  <text x="690" y="212" class="pin">D</text>
+  <text x="690" y="266" class="pin">S</text>
+  <!-- Rd drain pull-up -->
+  <rect x="660" y="120" width="30" height="24" class="blk"/>
+  <text x="696" y="137" class="note">Rd 4.7k</text>
+  <!-- Rg gate pull-down -->
+  <rect x="585" y="300" width="30" height="24" class="blk"/>
+  <text x="620" y="317" class="note">Rg 100k</text>
 
   <!-- ===== 80C88 ===== -->
   <rect x="960" y="160" width="210" height="200" class="blk"/>
@@ -82,25 +88,25 @@
 
   <!-- ================= WIRES (each labelled from-pin -> to-pin) ============ -->
 
-  <!-- GP15 -> 1A -->
-  <path class="sig" d="M262 195 H560 V205 H610"/>
-  <text x="330" y="189" class="wlbl">GP15(20) → 1A(2)</text>
-  <!-- 1Y -> 80C88 CLK -->
-  <path class="sig" d="M790 205 H960"/>
-  <text x="812" y="199" class="wlbl">1Y(3) → CLK(19)</text>
-
-  <!-- 74HCT Vcc(14) -> +5V -->
-  <path class="pwr" d="M700 160 V100"/>
-  <circle cx="700" cy="100" r="4" fill="#d11"/>
-  <text x="706" y="135" class="wlbl" fill="#d11">Vcc(14)→+5V</text>
-  <!-- 74HCT GND(7) -> GND -->
-  <path class="gnd" d="M665 290 V305 H575 V745"/>
-  <circle cx="575" cy="745" r="4" fill="#0a7d2c"/>
-  <text x="500" y="300" class="wlbl" fill="#0a7d2c">GND(7)→GND</text>
-  <!-- /OE(1) -> GND -->
-  <path class="gnd" d="M610 248 H595 V745"/>
-  <circle cx="595" cy="745" r="4" fill="#0a7d2c"/>
-  <text x="540" y="242" class="wlbl" fill="#0a7d2c">/OE(1)→GND</text>
+  <!-- GP15 -> Q1 gate, with Rg pull-down to GND -->
+  <path class="sig" d="M262 195 H600 V232 H635"/>
+  <text x="330" y="189" class="wlbl">GP15(20) → gate</text>
+  <circle cx="600" cy="232" r="3.5" fill="#111"/>
+  <path class="gnd" d="M600 232 V300"/>
+  <path class="gnd" d="M600 324 V745"/>
+  <circle cx="600" cy="745" r="4" fill="#0a7d2c"/>
+  <!-- Q1 drain -> Rd -> +5V -->
+  <path class="pwr" d="M675 195 V144"/>
+  <path class="pwr" d="M675 120 V100"/>
+  <circle cx="675" cy="100" r="4" fill="#d11"/>
+  <text x="700" y="113" class="wlbl" fill="#d11">+5V</text>
+  <!-- Q1 drain -> 80C88 CLK -->
+  <path class="sig" d="M675 195 H770 V205 H960"/>
+  <text x="690" y="188" class="wlbl">drain → CLK(19)</text>
+  <!-- Q1 source -> GND -->
+  <path class="gnd" d="M675 270 H900 V745"/>
+  <circle cx="900" cy="745" r="4" fill="#0a7d2c"/>
+  <text x="760" y="264" class="wlbl" fill="#0a7d2c">source → GND</text>
 
   <!-- 80C88 Vcc(40) -> +5V -->
   <path class="pwr" d="M1065 160 V100"/>

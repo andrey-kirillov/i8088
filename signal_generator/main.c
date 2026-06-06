@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/critical_section.h"
@@ -21,12 +22,17 @@
 #include "lcd1602_i2c.h"
 
 // ----- Pin assignments -------------------------------------------------------
-#define CLK_GPIO        15      // clock output -> 74HCT buffer -> 80C88 CLK
+#define CLK_GPIO        15      // clock output -> Q1 level shifter -> 80C88 CLK
+// GP15 drives the 80C88 CLK through an INVERTING transistor stage (single
+// N-MOSFET, 3.3V -> 5V). With CLK_INVERTED=1 the firmware pre-inverts the GPIO so
+// the CPU's CLK stays high for 1/3 of the period (the 8088 33% duty). Set to 0 for
+// a non-inverting buffer (e.g. 74HCT125) wired straight to CLK.
+#define CLK_INVERTED    1
 #define MODE_BTN_GPIO   14      // toggles AUTO/MANUAL, active-low to GND
 #define STEP_BTN_GPIO   13      // single-step in MANUAL, active-low to GND
 #define POT_ADC_GPIO    26      // potentiometer wiper -> ADC0
 #define POT_ADC_CHANNEL 0
-#define STATUS_LED_GPIO PICO_DEFAULT_LED_PIN // on = MANUAL mode
+#define STATUS_LED_GPIO PICO_DEFAULT_LED_PIN // built-in LED, solid on = running
 
 // ----- LCD (PCF8574 I2C backpack) -------------------------------------------
 #define LCD_I2C        i2c0
@@ -45,10 +51,13 @@
 #define US_PER_MS          1000.0f
 
 // ----- Timing / smoothing ----------------------------------------------------
-#define ADC_SMOOTH_ALPHA  0.20f  // EMA weight for the new sample
-#define DEBOUNCE_US       25000  // button debounce window
-#define LCD_REFRESH_US    150000 // LCD redraw interval
-#define MANUAL_IDLE_US    200    // core-1 idle poll while waiting for a step
+#define ADC_SMOOTH_ALPHA   0.20f  // EMA weight for the new sample
+#define ADC_OVERSAMPLE     16     // ADC reads averaged per sample (noise rejection)
+#define ADC_END_DEADZONE   40.0f  // counts trimmed at each travel end (reach 1 & 100 Hz)
+#define FREQ_HYSTERESIS_HZ 0.2f   // ignore smaller changes so the readout stays steady
+#define DEBOUNCE_US        25000  // button debounce window
+#define LCD_REFRESH_US     150000 // LCD redraw interval
+#define MANUAL_IDLE_US     200    // core-1 idle poll while waiting for a step
 
 // ----- Shared state (core 0 writes, core 1 reads) ---------------------------
 static critical_section_t s_clk_lock;
@@ -58,11 +67,17 @@ static volatile bool      s_manual  = false;  // AUTO (false) / MANUAL (true)
 static volatile bool      s_step_request = false;
 static volatile uint32_t  s_step_count   = 0;
 
-// Drive one full clock cycle: high for high_us, then low for low_us.
+// Drive the GPIO so the 80C88 CLK pin reaches `cpu_high`, compensating for the
+// inverting transistor stage between GP15 and the CPU.
+static inline void clk_drive(bool cpu_high) {
+    gpio_put(CLK_GPIO, CLK_INVERTED ? !cpu_high : cpu_high);
+}
+
+// Drive one full clock cycle: CPU CLK high for high_us, then low for low_us.
 static void emit_clock_cycle(uint32_t high_us, uint32_t low_us) {
-    gpio_put(CLK_GPIO, 1);
+    clk_drive(true);
     busy_wait_us(high_us);
-    gpio_put(CLK_GPIO, 0);
+    clk_drive(false);
     busy_wait_us(low_us);
 }
 
@@ -84,17 +99,30 @@ static void core1_clock_engine(void) {
             emit_clock_cycle(high_us, low_us);
             s_step_count++;
         } else {
-            gpio_put(CLK_GPIO, 0);
+            clk_drive(false);
             busy_wait_us(MANUAL_IDLE_US);
         }
     }
 }
 
-// Read the pot (smoothed) and return the mapped frequency in Hz (1..100).
+// Read the pot (oversampled + smoothed) and map to a frequency in Hz (1..100).
+// A small dead-zone at each end of pot travel makes the extremes reach exactly
+// 1 Hz and 100 Hz despite ADC offset (which otherwise floors the low end near 1.2 Hz).
 static float read_frequency_hz(float *adc_ema) {
-    uint16_t raw = adc_read();
+    uint32_t accumulator = 0;
+    for (uint32_t sample = 0; sample < ADC_OVERSAMPLE; sample++) {
+        accumulator += adc_read();
+    }
+    float raw = (float)accumulator / ADC_OVERSAMPLE;
     *adc_ema += (raw - *adc_ema) * ADC_SMOOTH_ALPHA;
-    float fraction = *adc_ema / ADC_FULL_SCALE;
+
+    float span = ADC_FULL_SCALE - 2.0f * ADC_END_DEADZONE;
+    float fraction = (*adc_ema - ADC_END_DEADZONE) / span;
+    if (fraction < 0.0f) {
+        fraction = 0.0f;
+    } else if (fraction > 1.0f) {
+        fraction = 1.0f;
+    }
     return FREQ_MIN_HZ + fraction * (FREQ_MAX_HZ - FREQ_MIN_HZ);
 }
 
@@ -159,15 +187,15 @@ static void update_display(float freq_hz) {
 int main(void) {
     stdio_init_all();
 
-    // Clock output.
+    // Clock output (idle CPU CLK low through the inverting stage).
     gpio_init(CLK_GPIO);
     gpio_set_dir(CLK_GPIO, GPIO_OUT);
-    gpio_put(CLK_GPIO, 0);
+    clk_drive(false);
 
-    // Status LED.
+    // Built-in LED solid on to show the firmware is running.
     gpio_init(STATUS_LED_GPIO);
     gpio_set_dir(STATUS_LED_GPIO, GPIO_OUT);
-    gpio_put(STATUS_LED_GPIO, 0);
+    gpio_put(STATUS_LED_GPIO, 1);
 
     // Potentiometer ADC.
     adc_init();
@@ -190,7 +218,8 @@ int main(void) {
 
     // Seed timing before launching the clock engine on core 1.
     float adc_ema = adc_read();
-    publish_timing(read_frequency_hz(&adc_ema));
+    float stable_freq_hz = read_frequency_hz(&adc_ema);
+    publish_timing(stable_freq_hz);
     critical_section_init(&s_clk_lock);
     multicore_launch_core1(core1_clock_engine);
 
@@ -198,18 +227,24 @@ int main(void) {
     while (true) {
         if (button_pressed(&mode_button)) {
             s_manual = !s_manual;
-            gpio_put(STATUS_LED_GPIO, s_manual);
         }
         if (button_pressed(&step_button) && s_manual) {
             s_step_request = true;
         }
 
-        float freq_hz = read_frequency_hz(&adc_ema);
-        publish_timing(freq_hz);
+        // Hysteresis keeps the clock and the T/H readout steady while the knob is
+        // still; the rail check still lets the travel ends snap to exactly 1/100 Hz.
+        float candidate_hz = read_frequency_hz(&adc_ema);
+        bool at_rail = candidate_hz <= FREQ_MIN_HZ || candidate_hz >= FREQ_MAX_HZ;
+        if (fabsf(candidate_hz - stable_freq_hz) >= FREQ_HYSTERESIS_HZ ||
+            (at_rail && candidate_hz != stable_freq_hz)) {
+            stable_freq_hz = candidate_hz;
+            publish_timing(stable_freq_hz);
+        }
 
         uint64_t now = time_us_64();
         if (now >= next_lcd_update) {
-            update_display(freq_hz);
+            update_display(stable_freq_hz);
             next_lcd_update = now + LCD_REFRESH_US;
         }
     }
