@@ -1,0 +1,43 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "configure cmake",
+            "type": "shell",
+            "command": "make configure",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": [],
+            "detail": "Configure only: creates build/ and generates build.ninja. Re-run when CMakeLists.txt changes. Compiler (ARM GCC 14.2) + SDK 2.2.0 + picotool are reused from the sibling magner150 project's ./toolchain (REF_TOOLCHAIN in CMakeLists)."
+        },
+        {
+            "label": "build pico",
+            "type": "shell",
+            "command": "make build-pico",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": "$gcc",
+            "detail": "Configure (if needed) + build via Ninja -> build/clkgen.uf2. Tools: magner150 ./toolchain/14_2_Rel1 (gcc 14.2) + pico-sdk-2.2.0 + picotool. PICO_BOARD=pico (RP2040)."
+        },
+        {
+            "label": "flash pico (USB cable, no button)",
+            "type": "shell",
+            "command": "make flash-pico",
+            "options": { "cwd": "${workspaceFolder}" },
+            "dependsOn": "build pico",
+            "group": "build",
+            "problemMatcher": [],
+            "detail": "picotool load -fx -u: resets a running board into BOOTSEL over USB, flashes, executes. Works only while the running USB-stdio firmware is alive."
+        },
+        {
+            "label": "flash pico (hold BOOTSEL button)",
+            "type": "shell",
+            "command": "make flash-bootsel",
+            "options": { "cwd": "${workspaceFolder}" },
+            "dependsOn": "build pico",
+            "group": "build",
+            "problemMatcher": [],
+            "detail": "Fallback when the USB reset (-u) fails. Hold BOOTSEL while plugging USB, then run. picotool load -fx (no -u)."
+        }
+    ]
+}

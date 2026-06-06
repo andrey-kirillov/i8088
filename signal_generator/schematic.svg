@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" font-family="Menlo,Consolas,monospace">
+  <rect x="0" y="0" width="1200" height="800" fill="#ffffff"/>
+
+  <style>
+    .blk   { fill:#eef3fb; stroke:#1b2a4a; stroke-width:2.5; }
+    .title { font-size:16px; font-weight:bold; fill:#10203f; }
+    .pin   { font-size:13px; fill:#10203f; }
+    .note  { font-size:12px; fill:#333; }
+    .warn  { font-size:13px; font-weight:bold; fill:#b00000; }
+    .sig   { stroke:#111; stroke-width:2.5; fill:none; }
+    .pwr   { stroke:#d11; stroke-width:2.5; fill:none; }
+    .p33   { stroke:#e08000; stroke-width:2.5; fill:none; }
+    .gnd   { stroke:#0a7d2c; stroke-width:2.5; fill:none; }
+    .wlbl  { font-size:11px; font-weight:bold; fill:#1840a0; }
+    .stub  { stroke:#111; stroke-width:2; fill:none; }
+  </style>
+
+  <text x="40" y="32" class="title" font-size="18">i8088 Slow-Clock Generator — exact pin-to-pin wiring (RP2040 Pico 1)</text>
+  <text x="40" y="54" class="warn">Target = 80C88 (CMOS). CLK level-shifted 3.3V→5V via 74HCT125, 33% duty. Potentiometer powered from 3V3 — NO divider.</text>
+
+  <!-- ===== power rails ===== -->
+  <line x1="300" y1="100" x2="1170" y2="100" class="pwr"/>
+  <text x="300" y="92" class="pin" fill="#d11" font-weight="bold">+5V rail  (Pico VBUS pin 40)</text>
+  <line x1="270" y1="745" x2="1170" y2="745" class="gnd"/>
+  <text x="540" y="767" class="pin" fill="#0a7d2c" font-weight="bold">GND rail  (Pico GND — common to every device)</text>
+
+  <!-- ===== Pico ===== -->
+  <rect x="50" y="150" width="190" height="480" class="blk"/>
+  <text x="145" y="178" text-anchor="middle" class="title">Pico (RP2040)</text>
+  <text x="230" y="200" text-anchor="end" class="pin">GP15 (20)</text>
+  <text x="230" y="245" text-anchor="end" class="pin">GP14 (19)</text>
+  <text x="230" y="290" text-anchor="end" class="pin">GP13 (17)</text>
+  <text x="230" y="335" text-anchor="end" class="pin">GP26/ADC0 (31)</text>
+  <text x="230" y="380" text-anchor="end" class="pin">GP4 SDA (6)</text>
+  <text x="230" y="425" text-anchor="end" class="pin">GP5 SCL (7)</text>
+  <text x="230" y="485" text-anchor="end" class="pin">3V3 (36)</text>
+  <text x="230" y="535" text-anchor="end" class="pin">VBUS 5V (40)</text>
+  <text x="230" y="595" text-anchor="end" class="pin">GND</text>
+  <line x1="240" y1="195" x2="262" y2="195" class="stub"/>
+  <line x1="240" y1="240" x2="262" y2="240" class="stub"/>
+  <line x1="240" y1="285" x2="262" y2="285" class="stub"/>
+  <line x1="240" y1="330" x2="262" y2="330" class="stub"/>
+  <line x1="240" y1="375" x2="262" y2="375" class="stub"/>
+  <line x1="240" y1="420" x2="262" y2="420" class="stub"/>
+  <line x1="240" y1="480" x2="262" y2="480" class="stub"/>
+  <line x1="240" y1="530" x2="262" y2="530" class="stub"/>
+  <line x1="240" y1="590" x2="262" y2="590" class="stub"/>
+
+  <!-- ===== 74HCT125 ===== -->
+  <rect x="610" y="160" width="180" height="130" class="blk"/>
+  <text x="700" y="186" text-anchor="middle" class="title">74HCT125</text>
+  <text x="620" y="212" class="pin">1A (2)</text>
+  <text x="620" y="250" class="pin">/OE (1)</text>
+  <text x="780" y="212" text-anchor="end" class="pin">1Y (3)</text>
+  <text x="700" y="280" text-anchor="middle" class="note">Vcc(14)  GND(7)</text>
+
+  <!-- ===== 80C88 ===== -->
+  <rect x="960" y="160" width="210" height="200" class="blk"/>
+  <text x="1065" y="186" text-anchor="middle" class="title">80C88 CPU</text>
+  <text x="970" y="212" class="pin">CLK (19)</text>
+  <text x="970" y="248" class="note">READY (22) = +5V</text>
+  <text x="970" y="276" class="note">RESET (21) = RC / 82C84A</text>
+  <text x="970" y="304" class="note">Vcc (40) = +5V</text>
+  <text x="970" y="332" class="note">GND (1, 20) = GND</text>
+
+  <!-- ===== 1602 LCD ===== -->
+  <rect x="610" y="440" width="250" height="120" class="blk"/>
+  <text x="735" y="472" text-anchor="middle" class="title">1602 LCD</text>
+  <text x="735" y="496" text-anchor="middle" class="note">PCF8574 I2C backpack (0x27)</text>
+  <text x="620" y="484" class="pin">SDA</text>
+  <text x="620" y="524" class="pin">SCL</text>
+  <text x="735" y="548" text-anchor="middle" class="note">VCC=+5V   GND</text>
+
+  <!-- ===== Potentiometer (no divider) — placed below the SDA/SCL lanes ===== -->
+  <rect x="430" y="500" width="44" height="120" class="blk"/>
+  <text x="452" y="492" text-anchor="middle" class="pin">RV1 10k pot</text>
+  <line x1="404" y1="560" x2="432" y2="560" class="sig"/>
+  <polygon points="432,560 422,555 422,565" fill="#111"/>
+  <text x="486" y="545" class="note">top = 3V3</text>
+  <text x="486" y="563" class="note">wiper = GP26</text>
+  <text x="486" y="581" class="note">bottom = GND</text>
+
+  <!-- ================= WIRES (each labelled from-pin -> to-pin) ============ -->
+
+  <!-- GP15 -> 1A -->
+  <path class="sig" d="M262 195 H560 V205 H610"/>
+  <text x="330" y="189" class="wlbl">GP15(20) → 1A(2)</text>
+  <!-- 1Y -> 80C88 CLK -->
+  <path class="sig" d="M790 205 H960"/>
+  <text x="812" y="199" class="wlbl">1Y(3) → CLK(19)</text>
+
+  <!-- 74HCT Vcc(14) -> +5V -->
+  <path class="pwr" d="M700 160 V100"/>
+  <circle cx="700" cy="100" r="4" fill="#d11"/>
+  <text x="706" y="135" class="wlbl" fill="#d11">Vcc(14)→+5V</text>
+  <!-- 74HCT GND(7) -> GND -->
+  <path class="gnd" d="M665 290 V305 H575 V745"/>
+  <circle cx="575" cy="745" r="4" fill="#0a7d2c"/>
+  <text x="500" y="300" class="wlbl" fill="#0a7d2c">GND(7)→GND</text>
+  <!-- /OE(1) -> GND -->
+  <path class="gnd" d="M610 248 H595 V745"/>
+  <circle cx="595" cy="745" r="4" fill="#0a7d2c"/>
+  <text x="540" y="242" class="wlbl" fill="#0a7d2c">/OE(1)→GND</text>
+
+  <!-- 80C88 Vcc(40) -> +5V -->
+  <path class="pwr" d="M1065 160 V100"/>
+  <circle cx="1065" cy="100" r="4" fill="#d11"/>
+  <text x="1071" y="135" class="wlbl" fill="#d11">Vcc(40)→+5V</text>
+  <!-- 80C88 GND -> GND -->
+  <path class="gnd" d="M1020 360 V745"/>
+  <circle cx="1020" cy="745" r="4" fill="#0a7d2c"/>
+  <text x="1026" y="400" class="wlbl" fill="#0a7d2c">GND(1,20)→GND</text>
+
+  <!-- LCD Vcc -> +5V -->
+  <path class="pwr" d="M845 440 V100"/>
+  <circle cx="845" cy="100" r="4" fill="#d11"/>
+  <text x="851" y="420" class="wlbl" fill="#d11">VCC→+5V</text>
+  <!-- LCD GND -> GND -->
+  <path class="gnd" d="M715 560 V745"/>
+  <circle cx="715" cy="745" r="4" fill="#0a7d2c"/>
+  <text x="721" y="600" class="wlbl" fill="#0a7d2c">GND→GND</text>
+  <!-- GP4 -> SDA -->
+  <path class="sig" d="M262 375 H560 V480 H610"/>
+  <text x="300" y="369" class="wlbl">GP4(6) → SDA</text>
+  <!-- GP5 -> SCL -->
+  <path class="sig" d="M262 420 H535 V520 H610"/>
+  <text x="300" y="414" class="wlbl">GP5(7) → SCL</text>
+
+  <!-- GP14 -> SW1 -> GND -->
+  <rect x="330" y="228" width="120" height="24" fill="#fff" stroke="#111" stroke-width="2"/>
+  <text x="390" y="245" text-anchor="middle" class="pin">SW1 MODE</text>
+  <path class="sig" d="M262 240 H330"/>
+  <text x="270" y="234" class="wlbl">GP14(19)</text>
+  <path class="gnd" d="M450 240 H470 V745"/>
+  <circle cx="470" cy="745" r="4" fill="#0a7d2c"/>
+  <text x="475" y="690" class="wlbl" fill="#0a7d2c">→GND</text>
+
+  <!-- GP13 -> SW2 -> GND -->
+  <rect x="330" y="273" width="120" height="24" fill="#fff" stroke="#111" stroke-width="2"/>
+  <text x="390" y="290" text-anchor="middle" class="pin">SW2 STEP</text>
+  <path class="sig" d="M262 285 H330"/>
+  <text x="270" y="279" class="wlbl">GP13(17)</text>
+  <path class="gnd" d="M450 285 H505 V745"/>
+  <circle cx="505" cy="745" r="4" fill="#0a7d2c"/>
+  <text x="510" y="690" class="wlbl" fill="#0a7d2c">→GND</text>
+
+  <!-- GP26 -> pot wiper -->
+  <path class="sig" d="M262 330 H405 V560 H404"/>
+  <text x="290" y="324" class="wlbl">GP26(31) → wiper</text>
+  <!-- 3V3 -> pot top -->
+  <path class="p33" d="M262 480 H452 V500"/>
+  <text x="300" y="474" class="wlbl" fill="#e08000">3V3(36) → top</text>
+  <!-- pot bottom -> GND -->
+  <path class="gnd" d="M452 620 V745"/>
+  <circle cx="452" cy="745" r="4" fill="#0a7d2c"/>
+
+  <!-- ===== legend ===== -->
+  <rect x="610" y="640" width="500" height="56" fill="#fafafa" stroke="#bbb"/>
+  <line x1="622" y1="662" x2="660" y2="662" class="pwr"/><text x="668" y="666" class="note">+5V</text>
+  <line x1="720" y1="662" x2="758" y2="662" class="p33"/><text x="766" y="666" class="note">+3V3</text>
+  <line x1="830" y1="662" x2="868" y2="662" class="gnd"/><text x="876" y="666" class="note">GND</text>
+  <line x1="930" y1="662" x2="968" y2="662" class="sig"/><text x="976" y="666" class="note">signal</text>
+  <text x="622" y="688" class="note">● dot = electrical connection.   plain crossing = no connection.</text>
+</svg>
