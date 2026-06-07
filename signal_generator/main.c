@@ -54,13 +54,14 @@
 #define ADC_FULL_SCALE     4095.0f
 #define US_PER_SECOND      1000000.0f
 
-// Fixed CLK high-pulse width. The static CMOS 80C88 only needs each phase above its
-// minimum (high TCHCL >= 69 ns, low TCLCH >= 118 ns) with no duty-cycle rule, so the
-// high pulse is held CONSTANT and only the low time (frequency) varies. 100 us sits
-// well above the 69 ns floor and the MOSFET's RC edge, yet stays a small slice of
-// the period across 1-100 Hz. Keep it < 1000 us for the LCD's 3-digit field.
-#define PULSE_WIDTH_US     100u
-#define MIN_LOW_US         2u    // floor on the low phase if period ever nears pulse
+// CLK high time = DUTY_HIGH of the period (a roughly square wave) so an LED on the
+// clock visibly BLINKS at low frequencies. The static CMOS 80C88 has no maximum high
+// time or period and no duty-cycle rule -- it only needs each phase above its minimum
+// (high TCHCL >= 69 ns, low TCLCH >= 118 ns), so any wide pulse is fine. PULSE_WIDTH_US
+// is just a floor keeping a clean minimum high if the period ever gets tiny.
+#define DUTY_HIGH          0.5f
+#define PULSE_WIDTH_US     100u  // minimum high pulse (floor)
+#define MIN_LOW_US         2u    // floor on the low phase if period ever nears the high
 #define LOW_POLL_US        5000u // re-check pot/mode at least this often during low
 
 // The 80C88 RESET must be HIGH for >4 clock cycles (and the high->low edge >=50 us
@@ -175,16 +176,20 @@ static float read_frequency_hz(float *adc_ema) {
     return FREQ_MIN_HZ + fraction * (FREQ_MAX_HZ - FREQ_MIN_HZ);
 }
 
-// Publish the shared high/low widths for a frequency: the high pulse is fixed, so
-// only the low time changes (low = period - pulse).
+// Publish the shared high/low widths: high = DUTY_HIGH of the period (floored at
+// PULSE_WIDTH_US), low = the rest. The wide high makes a clock LED visibly blink.
 static void publish_timing(float freq_hz) {
     float period_us = US_PER_SECOND / freq_hz;
+    uint32_t high_us = (uint32_t)(period_us * DUTY_HIGH);
+    if (high_us < PULSE_WIDTH_US) {
+        high_us = PULSE_WIDTH_US;
+    }
     uint32_t low_us = MIN_LOW_US;
-    if (period_us > (float)(PULSE_WIDTH_US + MIN_LOW_US)) {
-        low_us = (uint32_t)period_us - PULSE_WIDTH_US;
+    if (period_us > (float)(high_us + MIN_LOW_US)) {
+        low_us = (uint32_t)period_us - high_us;
     }
     critical_section_enter_blocking(&s_clk_lock);
-    s_high_us = PULSE_WIDTH_US;
+    s_high_us = high_us;
     s_low_us  = low_us;
     critical_section_exit(&s_clk_lock);
 }
@@ -258,12 +263,10 @@ int main(void) {
     gpio_set_dir(CLK_GPIO, GPIO_OUT);
     clk_drive(false);
 
-    // Built-in LED solid on to show the firmware is running. Pull-down keeps it off
-    // while the pin is hi-Z (before it is driven).
+    // Built-in LED off (driven low).
     gpio_init(STATUS_LED_GPIO);
-    gpio_pull_down(STATUS_LED_GPIO);
     gpio_set_dir(STATUS_LED_GPIO, GPIO_OUT);
-    gpio_put(STATUS_LED_GPIO, 1);
+    gpio_put(STATUS_LED_GPIO, 0);
 
     // Potentiometer ADC. adc_gpio_init() disables the digital input and BOTH pulls on
     // GP26 — an analog input must float to the pot, never to an internal pull.
